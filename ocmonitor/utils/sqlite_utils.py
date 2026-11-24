@@ -46,6 +46,23 @@ _V2_TOOL_FROM = (
     "CASE WHEN json_valid(m.data) THEN m.data ELSE '{}' END, '$.content') p"
 )
 
+# OpenCode 2.4+ moved message parts into their own ``session_part`` table and
+# stopped mirroring them into ``session_message.data.content``. Depending on
+# how a session was written, its tool calls live in one place or the other
+# (they never appear in both), so both sources have to be combined.
+_V2_TOOL_FROM_PARTS = (
+    "(SELECT session_id, message_id, data FROM session_part"
+    " UNION ALL"
+    " SELECT sm.session_id, sm.id, c.value"
+    " FROM session_message sm, json_each("
+    "CASE WHEN json_valid(sm.data) THEN sm.data ELSE '{}' END, '$.content') c"
+    " WHERE json_extract(c.value, '$.type') = 'tool'"
+    " AND NOT EXISTS ("
+    "SELECT 1 FROM session_part sp"
+    " WHERE sp.call_id = json_extract(c.value, '$.id'))"
+    ") p"
+)
+
 _SCHEMA_V2: Dict[str, str] = {
     "session": "session_v2",
     "message": "session_message",
@@ -60,6 +77,17 @@ _SCHEMA_V2: Dict[str, str] = {
     "tool_from_with_message": _V2_TOOL_FROM,
     "tool_session": "m.session_id",
     "tool_data": "p.value",
+    "tool_name_path": "$.name",
+}
+
+_SCHEMA_V2_WITH_PARTS: Dict[str, str] = {
+    **_SCHEMA_V2,
+    "tool_from": _V2_TOOL_FROM_PARTS,
+    "tool_from_with_message": (
+        f"{_V2_TOOL_FROM_PARTS} JOIN session_message m ON p.message_id = m.id"
+    ),
+    "tool_session": "p.session_id",
+    "tool_data": "p.data",
     "tool_name_path": "$.name",
 }
 
@@ -189,11 +217,13 @@ class SQLiteProcessor:
             row[0]
             for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table' "
-                "AND name IN ('session_v2', 'message', 'part')"
+                "AND name IN ('session_v2', 'session_part', 'message', 'part')"
             )
         }
         if "session_v2" not in tables:
             return _SCHEMA_V1
+        if "session_part" in tables:
+            return _SCHEMA_V2_WITH_PARTS
         if {"message", "part"} <= tables:
             return _SCHEMA_V2_WITH_LEGACY
         return _SCHEMA_V2

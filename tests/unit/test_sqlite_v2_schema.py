@@ -302,3 +302,77 @@ def test_upgraded_db_model_queries_and_stats(upgraded_db: Path):
     db_stats = SQLiteProcessor.get_database_stats(upgraded_db)
     assert db_stats["session_count"] == 2
     assert db_stats["message_count"] == 3
+
+
+def _tool(name, status, call_id):
+    return {"type": "tool", "id": call_id, "name": name,
+            "state": {"status": status}}
+
+
+@pytest.fixture
+def v2_parts_db(tmp_path: Path) -> Path:
+    """OpenCode 2.4+ database: parts live in ``session_part``.
+
+    Some sessions keep their tool calls inline in the message content and
+    others only in ``session_part``; a call mirrored in both must count once.
+    """
+    db_path = tmp_path / "opencode.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript("""
+        CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT);
+        CREATE TABLE session_v2 (
+            id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT,
+            directory TEXT NOT NULL, title TEXT,
+            time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL
+        );
+        CREATE TABLE session_message (
+            id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
+            seq INTEGER NOT NULL, time_created INTEGER NOT NULL,
+            time_updated INTEGER NOT NULL, data TEXT NOT NULL
+        );
+        CREATE TABLE session_part (
+            message_id TEXT NOT NULL, session_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL, type TEXT NOT NULL, call_id TEXT,
+            time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
+            data TEXT NOT NULL
+        );
+    """)
+    conn.execute("INSERT INTO project VALUES ('p1', '/work/myproj', 'myproj')")
+    conn.execute(
+        "INSERT INTO session_v2 VALUES ('ses_p', 'p1', NULL, '/work/myproj', 'Parts', 1000, 2000)"
+    )
+    message = _assistant(
+        "gpt-5.5", "openai", 100,
+        tools=[("read", "completed")],
+    )
+    data = json.loads(message)
+    data["content"].append(_tool("glob", "completed", "call_dup"))
+    conn.execute(
+        "INSERT INTO session_message VALUES ('m1', 'ses_p', 'assistant', 1, 1000, 1000, ?)",
+        (json.dumps(data),),
+    )
+    parts = [
+        ("call_dup", "glob", "completed"),   # also inline -> counted once
+        ("call_1", "shell", "completed"),
+        ("call_2", "edit", "error"),
+        ("call_3", "shell", "running"),      # not terminal -> ignored
+    ]
+    for ordinal, (call_id, name, status) in enumerate(parts):
+        conn.execute(
+            "INSERT INTO session_part VALUES ('m1', 'ses_p', ?, 'tool', ?, 1000, 1000, ?)",
+            (ordinal, call_id, json.dumps(_tool(name, status, call_id))),
+        )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+def test_session_part_tools_are_combined_with_inline_content(v2_parts_db: Path):
+    stats = {s.tool_name: s.total_calls for s in
+             SQLiteProcessor.load_tool_usage_for_sessions(["ses_p"], v2_parts_db)}
+
+    assert stats == {"shell": 1, "edit": 1, "read": 1, "glob": 1}
+
+    by_model = {m.model_name: m.total_calls for m in
+                SQLiteProcessor.load_tool_usage_by_model_for_sessions(["ses_p"], v2_parts_db)}
+    assert by_model == {"gpt-5.5": 4}
