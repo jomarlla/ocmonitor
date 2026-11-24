@@ -5,6 +5,8 @@ from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
 
 from ..models.analytics import (
     DailyUsage,
@@ -18,6 +20,12 @@ from ..services.session_analyzer import SessionAnalyzer
 from ..services.session_grouper import SessionGrouper
 from ..ui.tables import TableFormatter
 from ..utils.file_utils import FileProcessor
+
+
+# Below these widths the full multi-column tables cannot show every value
+# without collapsing columns, so a compact three-column layout is used.
+_WORKFLOW_TABLE_MIN_WIDTH = 220
+_SESSIONS_TABLE_MIN_WIDTH = 245
 
 
 class ReportGenerator:
@@ -46,6 +54,186 @@ class ReportGenerator:
         if self.currency_converter:
             return self.currency_converter.format(amount)
         return f"${amount:.2f}"
+
+    def _compact_session_cell(
+        self, session: SessionData, prefix: str = "", started: Optional[str] = None
+    ) -> Text:
+        """Optional start time, title and full id, stacked for narrow terminals."""
+        text = Text()
+        if started:
+            text.append(started, style="table.row.time")
+            text.append("\n")
+        text.append(f"{prefix}{session.display_title}", style="table.row.main")
+        text.append(f"\n{' ' * len(prefix)}ID: ", style="table.row.time")
+        text.append(session.session_id, style="table.row.model")
+        return text
+
+    def _compact_session_details(
+        self,
+        session: SessionData,
+        force_recalculate: bool = False,
+        include_project: bool = False,
+        include_duration: bool = False,
+    ) -> Text:
+        """Model/agent and usage, stacked to keep every value complete."""
+        cost = session.calculate_total_cost(
+            self.analyzer.pricing_data, force_recalculate
+        )
+        models = ", ".join(session.models_used) or "-"
+
+        first_line = []
+        if include_project and session.project_name:
+            first_line.append(session.project_name)
+        first_line.append(models)
+        first_line.append(session.agent or "-")
+
+        text = Text(" · ".join(first_line), style="table.row.model")
+        text.append("\n")
+
+        second_line = []
+        if include_duration:
+            second_line.append(
+                self.table_formatter._format_duration(session.duration_ms)
+                if session.duration_ms
+                else "N/A"
+            )
+        second_line.extend(
+            [
+                f"{session.interaction_count} interacciones",
+                f"{session.total_tokens.total:,} tokens",
+                self._fmt_cost(cost),
+            ]
+        )
+        text.append(" · ".join(second_line), style="table.row.tokens")
+        return text
+
+    def _display_workflow_sessions_compact_table(
+        self, workflows, force_recalculate: bool = False
+    ):
+        """Two-column layout for narrow terminals; folds instead of cropping."""
+        table = Table(
+            title="Session Workflows",
+            show_header=True,
+            header_style="table.header",
+            title_style="table.title",
+        )
+        table.add_column("Session", style="table.row.main", ratio=3, overflow="fold")
+        table.add_column("Details", style="table.row.model", ratio=2, overflow="fold")
+
+        for workflow in reversed(workflows):
+            workflow_cost = workflow.calculate_total_cost(
+                self.analyzer.pricing_data, force_recalculate
+            )
+            start_time = (
+                workflow.start_time.strftime("%Y-%m-%d %H:%M")
+                if workflow.start_time
+                else "N/A"
+            )
+
+            if workflow.has_sub_agents:
+                header = Text()
+                header.append(start_time, style="table.row.time")
+                header.append("\n")
+                header.append(workflow.display_title, style="table.row.main")
+                header.append("\nID: ", style="table.row.time")
+                header.append(workflow.workflow_id, style="table.row.model")
+
+                sub_label = (
+                    "sub-agente"
+                    if workflow.sub_agent_count == 1
+                    else "sub-agentes"
+                )
+                details = Text(
+                    f"{workflow.project_name} · {workflow.session_count} sesiones "
+                    f"({workflow.sub_agent_count} {sub_label})",
+                    style="table.row.model",
+                )
+                details.append("\n")
+                details.append(
+                    f"{sum(s.interaction_count for s in workflow.all_sessions)} "
+                    f"interacciones · {workflow.total_tokens.total:,} tokens · "
+                    f"{self._fmt_cost(workflow_cost)}",
+                    style="table.row.tokens",
+                )
+                table.add_row(header, details, style="table.row.main")
+
+                main = workflow.main_session
+                table.add_row(
+                    self._compact_session_cell(main, "  ├─ "),
+                    self._compact_session_details(main, force_recalculate),
+                    style="table.row.dim",
+                )
+                for i, sub in enumerate(workflow.sub_agent_sessions):
+                    is_last = i == len(workflow.sub_agent_sessions) - 1
+                    prefix = "  └─ " if is_last else "  ├─ "
+                    table.add_row(
+                        self._compact_session_cell(sub, prefix),
+                        self._compact_session_details(sub, force_recalculate),
+                        style="table.row.dim",
+                    )
+            else:
+                main = workflow.main_session
+                table.add_row(
+                    self._compact_session_cell(main, started=start_time),
+                    self._compact_session_details(
+                        main, force_recalculate, include_project=True
+                    ),
+                )
+
+        self.console.print(table)
+
+    def _display_sessions_compact_table(
+        self, sessions: List[SessionData], force_recalculate: bool = False
+    ):
+        """Three-column summary for narrow terminals (--no-group)."""
+        table = Table(
+            title="OpenCode Sessions Summary",
+            show_header=True,
+            header_style="table.header",
+            title_style="table.title",
+        )
+        table.add_column("Session", style="table.row.main", ratio=3, overflow="fold")
+        table.add_column("Details", style="table.row.model", ratio=2, overflow="fold")
+
+        sorted_sessions = sorted(sessions, key=lambda s: s.start_time or s.session_id)
+        for session in sorted_sessions:
+            start_time = (
+                session.start_time.strftime("%Y-%m-%d %H:%M:%S")
+                if session.start_time
+                else "N/A"
+            )
+            table.add_row(
+                self._compact_session_cell(session, started=start_time),
+                self._compact_session_details(
+                    session,
+                    force_recalculate,
+                    include_project=True,
+                    include_duration=True,
+                ),
+            )
+
+        self.console.print(table)
+
+    def _print_workflow_summary(
+        self, sessions: List[SessionData], workflows, force_recalculate: bool = False
+    ):
+        """Print the summary panel and workflow count for the sessions table."""
+        summary_panel = self.table_formatter.create_summary_panel(
+            sessions, self.analyzer.pricing_data, force_recalculate
+        )
+        self.console.print(summary_panel)
+
+        total_workflows = len(workflows)
+        total_with_subs = sum(1 for w in workflows if w.has_sub_agents)
+        if total_with_subs > 0:
+            workflow_info = (
+                f"{total_workflows} workflows ({total_with_subs} with sub-agents)"
+            )
+            self.console.print(
+                Panel(
+                    workflow_info, title="Workflow Summary", border_style="table.header"
+                )
+            )
 
     def _get_model_breakdown_for_sessions(
         self, sessions: List[SessionData], force_recalculate: bool = False
@@ -803,10 +991,13 @@ class ReportGenerator:
         force_recalculate: bool = False,
     ):
         """Display sessions summary as table."""
-        table = self.table_formatter.create_sessions_table(
-            sessions, self.analyzer.pricing_data, force_recalculate
-        )
-        self.console.print(table)
+        if self.console.width < _SESSIONS_TABLE_MIN_WIDTH:
+            self._display_sessions_compact_table(sessions, force_recalculate)
+        else:
+            table = self.table_formatter.create_sessions_table(
+                sessions, self.analyzer.pricing_data, force_recalculate
+            )
+            self.console.print(table)
 
         summary_panel = self.table_formatter.create_summary_panel(
             sessions, self.analyzer.pricing_data, force_recalculate
@@ -826,6 +1017,15 @@ class ReportGenerator:
         grouper = SessionGrouper()
         workflows = grouper.group_sessions(sessions)
 
+        if self.console.width < _WORKFLOW_TABLE_MIN_WIDTH:
+            self._display_workflow_sessions_compact_table(
+                workflows, force_recalculate
+            )
+            self._print_workflow_summary(
+                sessions, workflows, force_recalculate
+            )
+            return
+
         table = Table(
             title="Session Workflows",
             show_header=True,
@@ -836,15 +1036,20 @@ class ReportGenerator:
         table.add_column("Started", style="table.row.time", no_wrap=True)
         table.add_column("Session ID", style="table.row.model", no_wrap=True)
         table.add_column(
-            "Session / Workflow", style="table.row.main", no_wrap=False, max_width=45
+            "Session / Workflow", style="table.row.main", no_wrap=False, overflow="fold"
         )
         table.add_column(
-            "Project", style="table.row.project", no_wrap=True, max_width=15
+            "Project", style="table.row.project", no_wrap=False, overflow="fold"
         )
-        table.add_column("Provider", style="table.row.model", no_wrap=True, max_width=15)
-        table.add_column("Model", style="table.row.model", no_wrap=True, max_width=25)
         table.add_column(
-            "Agent", justify="center", style="table.row.model", no_wrap=True
+            "Provider", style="table.row.model", no_wrap=False, overflow="fold"
+        )
+        table.add_column(
+            "Model", style="table.row.model", no_wrap=False, overflow="fold"
+        )
+        table.add_column(
+            "Agent", justify="center", style="table.row.model", no_wrap=False,
+            overflow="fold",
         )
         table.add_column("Interactions", justify="right", style="status.success")
         table.add_column("Tokens", justify="right", style="table.row.tokens")
@@ -860,8 +1065,6 @@ class ReportGenerator:
             if workflow.has_sub_agents:
                 # Show workflow summary row
                 title = workflow.display_title
-                if len(title) > 40:
-                    title = title[:37] + "..."
 
                 # Get start time for workflow
                 start_time = (
@@ -886,7 +1089,7 @@ class ReportGenerator:
                     f"[table.row.time]{start_time}[/table.row.time]",
                     f"[table.row.model]{workflow.workflow_id}[/table.row.model]",
                     f"[table.row.main]{title}[/table.row.main]",
-                    f"[table.row.project]{workflow.project_name[:15]}[/table.row.project]",
+                    f"[table.row.project]{workflow.project_name}[/table.row.project]",
                     f"[table.row.model]{provider}[/table.row.model]",
                     f"[table.row.model]{model}[/table.row.model]",
                     f"[table.row.model]+{workflow.sub_agent_count}[/table.row.model]",
@@ -902,8 +1105,6 @@ class ReportGenerator:
                     self.analyzer.pricing_data, force_recalculate
                 )
                 main_title = main.display_title
-                if len(main_title) > 38:
-                    main_title = main_title[:35] + "..."
 
                 # Get model for main session
                 main_models = main.models_used
@@ -938,8 +1139,6 @@ class ReportGenerator:
                         self.analyzer.pricing_data, force_recalculate
                     )
                     sub_title = sub.display_title
-                    if len(sub_title) > 38:
-                        sub_title = sub_title[:35] + "..."
 
                     # Get model for sub-agent session
                     sub_models = sub.models_used
@@ -972,8 +1171,6 @@ class ReportGenerator:
                     self.analyzer.pricing_data, force_recalculate
                 )
                 title = main.display_title
-                if len(title) > 42:
-                    title = title[:39] + "..."
 
                 # Get start time for single session
                 start_time = (
@@ -997,7 +1194,7 @@ class ReportGenerator:
                     start_time,
                     f"[table.row.model]{main.session_id}[/table.row.model]",
                     title,
-                    main.project_name[:15],
+                    main.project_name,
                     provider,
                     model,
                     main.agent or "-",
@@ -1008,26 +1205,7 @@ class ReportGenerator:
 
         self.console.print(table)
 
-        # Summary panel
-        total_workflows = len(workflows)
-        total_with_subs = sum(1 for w in workflows if w.has_sub_agents)
-        summary_panel = self.table_formatter.create_summary_panel(
-            sessions, self.analyzer.pricing_data, force_recalculate
-        )
-        self.console.print(summary_panel)
-
-        # Additional workflow info
-        if total_with_subs > 0:
-            from rich.panel import Panel
-
-            workflow_info = (
-                f"{total_workflows} workflows ({total_with_subs} with sub-agents)"
-            )
-            self.console.print(
-                Panel(
-                    workflow_info, title="Workflow Summary", border_style="table.header"
-                )
-            )
+        self._print_workflow_summary(sessions, workflows, force_recalculate)
 
     def _display_daily_breakdown_table(
         self,

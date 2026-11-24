@@ -97,10 +97,10 @@ class TableFormatter:
         # Add columns
         table.add_column("Started", style="table.row.time", no_wrap=True)
         table.add_column("Duration", style="table.row.time", no_wrap=True)
-        table.add_column("Session", style="table.row.main", max_width=35)
+        table.add_column("Session", style="table.row.main", overflow="fold")
         table.add_column("Session ID", style="table.row.model", no_wrap=True)
-        table.add_column("Provider", style="table.row.model", max_width=20)
-        table.add_column("Model", style="table.row.model", max_width=30)
+        table.add_column("Provider", style="table.row.model", overflow="fold")
+        table.add_column("Model", style="table.row.model", overflow="fold")
         table.add_column("Interactions", justify="right", style="status.success")
         table.add_column("Input Tokens", justify="right", style="table.row.tokens")
         table.add_column("Output Tokens", justify="right", style="table.row.tokens")
@@ -138,9 +138,6 @@ class TableFormatter:
                     start_time = session.start_time.strftime('%Y-%m-%d %H:%M:%S') if session.start_time else 'N/A'
                     duration = self._format_duration(session.duration_ms) if session.duration_ms else 'N/A'
                     session_display = session.display_title
-                    # Truncate if too long for display
-                    if len(session_display) > 35:
-                        session_display = session_display[:32] + "..."
                     session_id_display = session.session_id
                 else:
                     start_time = ""
@@ -150,8 +147,8 @@ class TableFormatter:
 
                 # Format model name
                 provider, model = FileProcessor.split_provider_model(display_model)
-                provider_text = Text(provider[:17] + "..." if len(provider) > 20 else provider)
-                model_text = Text(model[:27] + "..." if len(model) > 30 else model)
+                provider_text = Text(provider)
+                model_text = Text(model)
 
                 # Get cost color
                 cost_color = self.get_cost_color(stats['cost'])
