@@ -98,6 +98,7 @@ class TableFormatter:
         table.add_column("Started", style="table.row.time", no_wrap=True)
         table.add_column("Duration", style="table.row.time", no_wrap=True)
         table.add_column("Session", style="table.row.main", max_width=35)
+        table.add_column("Session ID", style="table.row.model", no_wrap=True)
         table.add_column("Provider", style="table.row.model", max_width=20)
         table.add_column("Model", style="table.row.model", max_width=30)
         table.add_column("Interactions", justify="right", style="status.success")
@@ -140,10 +141,12 @@ class TableFormatter:
                     # Truncate if too long for display
                     if len(session_display) > 35:
                         session_display = session_display[:32] + "..."
+                    session_id_display = session.session_id
                 else:
                     start_time = ""
                     duration = ""
                     session_display = ""
+                    session_id_display = ""
 
                 # Format model name
                 provider, model = FileProcessor.split_provider_model(display_model)
@@ -167,6 +170,7 @@ class TableFormatter:
                     start_time,
                     duration,
                     session_display,
+                    session_id_display,
                     provider_text,
                     model_text,
                     self.format_number(stats['files']),
@@ -191,6 +195,7 @@ class TableFormatter:
             Text("TOTALS", style="table.footer"),
             "",
             "",  # Empty session column
+            "",  # Empty session ID column
             "",  # Empty provider column
             Text(f"{len(sorted_sessions)} sessions", style="table.footer"),
             Text(self.format_number(total_interactions), style="status.success"),

@@ -834,6 +834,7 @@ class ReportGenerator:
         )
 
         table.add_column("Started", style="table.row.time", no_wrap=True)
+        table.add_column("Session ID", style="table.row.model", no_wrap=True)
         table.add_column(
             "Session / Workflow", style="table.row.main", no_wrap=False, max_width=45
         )
@@ -883,6 +884,7 @@ class ReportGenerator:
 
                 table.add_row(
                     f"[table.row.time]{start_time}[/table.row.time]",
+                    f"[table.row.model]{workflow.workflow_id}[/table.row.model]",
                     f"[table.row.main]{title}[/table.row.main]",
                     f"[table.row.project]{workflow.project_name[:15]}[/table.row.project]",
                     f"[table.row.model]{provider}[/table.row.model]",
@@ -916,6 +918,7 @@ class ReportGenerator:
 
                 table.add_row(
                     "",  # No separate start time for sub-rows
+                    f"[table.row.model]{main.session_id}[/table.row.model]",
                     f"  ├─ {main_title}",
                     "",
                     provider,
@@ -951,6 +954,7 @@ class ReportGenerator:
 
                     table.add_row(
                         "",  # No separate start time for sub-rows
+                        f"[table.row.model]{sub.session_id}[/table.row.model]",
                         f"{prefix} {sub_title}",
                         "",
                         provider,
@@ -991,6 +995,7 @@ class ReportGenerator:
 
                 table.add_row(
                     start_time,
+                    f"[table.row.model]{main.session_id}[/table.row.model]",
                     title,
                     main.project_name[:15],
                     provider,
