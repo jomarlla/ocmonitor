@@ -618,6 +618,74 @@ class SQLiteProcessor:
             conn.close()
 
     @classmethod
+    def get_workflow_by_session_id(
+        cls, session_id: str, db_path: Optional[Path] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Load the workflow that contains a session, active or finished.
+
+        Unlike :meth:`get_all_active_workflows`, this does not apply the
+        recency threshold, so historical sessions can be inspected. If the
+        given ID belongs to a sub-agent, its parent workflow is returned.
+
+        Args:
+            session_id: Main session, sub-agent session or workflow ID
+            db_path: Path to database (uses default if not provided)
+
+        Returns:
+            Workflow dictionary compatible with SessionWorkflow, or None if
+            the session does not exist or has no interactions.
+        """
+        if db_path is None:
+            db_path = cls.find_database_path()
+
+        if not db_path or not db_path.exists():
+            return None
+
+        conn = cls._get_connection(db_path)
+        try:
+            schema = cls._get_schema(conn)
+
+            def load_row(row: sqlite3.Row) -> Optional[SessionData]:
+                return cls.load_session_data(conn, row, include_zero_token=True)
+
+            row = conn.execute(
+                f"""
+                SELECT s.*, p.worktree as project_path, p.name as project_name
+                FROM {schema['session']} s
+                LEFT JOIN project p ON s.project_id = p.id
+                WHERE s.id = ?
+                """,
+                (session_id,),
+            ).fetchone()
+            if not row:
+                return None
+
+            # A sub-agent ID resolves to its parent workflow; fall back to the
+            # sub-agent itself when the parent has no loadable interactions.
+            candidates = [row]
+            if row["parent_id"]:
+                parent_row = conn.execute(
+                    f"""
+                    SELECT s.*, p.worktree as project_path, p.name as project_name
+                    FROM {schema['session']} s
+                    LEFT JOIN project p ON s.project_id = p.id
+                    WHERE s.id = ?
+                    """,
+                    (row["parent_id"],),
+                ).fetchone()
+                if parent_row:
+                    candidates.insert(0, parent_row)
+
+            for candidate in candidates:
+                session = load_row(candidate)
+                if session and session.files:
+                    return cls._build_workflow_dict(conn, session)
+
+            return None
+        finally:
+            conn.close()
+
+    @classmethod
     def _build_workflow_dict(
         cls, conn: sqlite3.Connection, main_session: SessionData
     ) -> Dict[str, Any]:

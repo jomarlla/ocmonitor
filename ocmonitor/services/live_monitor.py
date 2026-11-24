@@ -292,6 +292,32 @@ class LiveMonitor:
                 return workflow
         return None
 
+    def _resolve_pinned_sqlite_workflow(
+        self, workflows: List[Dict[str, Any]], selected_session_id: str
+    ) -> Optional[Dict[str, Any]]:
+        """Resolve a pinned ID, loading finished sessions from the database.
+
+        Active workflows are matched first; if the ID belongs to a session
+        that is no longer active (or very old), it is loaded directly and
+        added to the in-memory workflow list so the refresh loop can keep
+        displaying it.
+        """
+        workflow = self._resolve_selected_sqlite_workflow(
+            workflows, selected_session_id
+        )
+        if workflow:
+            return workflow
+
+        workflow = SQLiteProcessor.get_workflow_by_session_id(selected_session_id)
+        if not workflow:
+            return None
+
+        if not any(
+            wf.get("workflow_id") == workflow["workflow_id"] for wf in workflows
+        ):
+            workflows.insert(0, workflow)
+        return workflow
+
     def _resolve_selected_file_workflow(
         self, workflows: List[SessionWorkflow], selected_session_id: str
     ) -> Optional[SessionWorkflow]:
@@ -1503,14 +1529,11 @@ class LiveMonitor:
             active_workflows = self._get_sqlite_active_workflows(
                 allow_fallback=not bool(selected_session_id)
             )
-            if not active_workflows:
-                self.console.print(
-                    "[status.error]No sessions found in database.[/status.error]"
-                )
-                return
 
             if selected_session_id:
-                current_workflow = self._resolve_selected_sqlite_workflow(
+                # Pinned IDs may point at finished/old sessions, which are not
+                # in the active-workflow window. Load them directly instead.
+                current_workflow = self._resolve_pinned_sqlite_workflow(
                     active_workflows, selected_session_id
                 )
                 if not current_workflow:
@@ -1519,6 +1542,11 @@ class LiveMonitor:
                     )
                     return
             else:
+                if not active_workflows:
+                    self.console.print(
+                        "[status.error]No sessions found in database.[/status.error]"
+                    )
+                    return
                 current_workflow = self._select_most_recent_workflow(active_workflows)
 
             current_workflow_id = current_workflow["workflow_id"]
@@ -1689,27 +1717,29 @@ class LiveMonitor:
                     active_workflows = self._get_sqlite_active_workflows(
                         allow_fallback=not bool(selected_session_id)
                     )
-                    descriptors = self._describe_sqlite_workflows(active_workflows)
-
-                    if not active_workflows:
-                        self.console.print(
-                            "[status.warning]No workflows available to monitor.[/status.warning]"
-                        )
-                        break
 
                     if selected_session_id:
-                        new_current = self._resolve_selected_sqlite_workflow(
+                        # Finished/old sessions are reloaded by ID so pinned
+                        # mode keeps working after they leave the active window.
+                        new_current = self._resolve_pinned_sqlite_workflow(
                             active_workflows, selected_session_id
                         )
                         if not new_current:
                             self.console.print(
-                                f"[status.warning]Selected session/workflow '{selected_session_id}' is no longer active. Stopping monitor.[/status.warning]"
+                                f"[status.warning]Selected session/workflow '{selected_session_id}' is no longer available. Stopping monitor.[/status.warning]"
                             )
                             break
                     else:
+                        if not active_workflows:
+                            self.console.print(
+                                "[status.warning]No workflows available to monitor.[/status.warning]"
+                            )
+                            break
                         new_current = self._select_most_recent_workflow(
                             active_workflows
                         )
+
+                    descriptors = self._describe_sqlite_workflows(active_workflows)
 
                     if new_current["workflow_id"] != current_workflow_id:
                         current_workflow_id = new_current["workflow_id"]

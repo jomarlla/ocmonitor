@@ -1409,3 +1409,46 @@ class TestLiveMonitorProviderAwareRegressions:
 
         assert "claude-sonnet-4.5" in result
         assert result["claude-sonnet-4.5"]["context_window"] == 100000
+
+
+class TestPinnedSqliteWorkflow:
+    """Pinned mode can display sessions that are no longer active."""
+
+    def test_resolve_pinned_loads_finished_session(self, monkeypatch):
+        from ocmonitor.services.live_monitor import LiveMonitor
+
+        monitor = LiveMonitor(pricing_data={}, init_from_db=False)
+        finished = {"workflow_id": "wf-old", "all_sessions": []}
+        monkeypatch.setattr(
+            "ocmonitor.services.live_monitor.SQLiteProcessor.get_workflow_by_session_id",
+            lambda session_id: finished if session_id == "ses-old" else None,
+        )
+
+        workflows = []
+        result = monitor._resolve_pinned_sqlite_workflow(workflows, "ses-old")
+
+        assert result is finished
+        assert workflows == [finished]
+
+    def test_resolve_pinned_prefers_active_match(self, monkeypatch):
+        from ocmonitor.services.live_monitor import LiveMonitor
+
+        monitor = LiveMonitor(pricing_data={}, init_from_db=False)
+        monkeypatch.setattr(
+            "ocmonitor.services.live_monitor.SQLiteProcessor.get_workflow_by_session_id",
+            lambda session_id: pytest.fail("should not load from DB"),
+        )
+
+        active = {"workflow_id": "wf-active", "all_sessions": []}
+        assert monitor._resolve_pinned_sqlite_workflow([active], "wf-active") is active
+
+    def test_resolve_pinned_returns_none_for_unknown_id(self, monkeypatch):
+        from ocmonitor.services.live_monitor import LiveMonitor
+
+        monitor = LiveMonitor(pricing_data={}, init_from_db=False)
+        monkeypatch.setattr(
+            "ocmonitor.services.live_monitor.SQLiteProcessor.get_workflow_by_session_id",
+            lambda session_id: None,
+        )
+
+        assert monitor._resolve_pinned_sqlite_workflow([], "missing") is None

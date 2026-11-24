@@ -115,3 +115,49 @@ def test_get_all_active_workflows_orders_by_latest_parent_activity(tmp_path: Pat
     )
 
     assert [w["workflow_id"] for w in workflows[:2]] == ["older-parent", "newer-parent"]
+
+
+def test_get_workflow_by_session_id_loads_finished_session(tmp_path: Path):
+    db_path = tmp_path / "opencode.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    _create_base_schema(conn)
+
+    old_ms = int(time.time() * 1000) - 3 * 24 * 60 * 60 * 1000
+    conn.execute(
+        "INSERT INTO project (id, worktree, name) VALUES (?, ?, ?)",
+        ("proj", "/tmp/project", "project"),
+    )
+    conn.execute(
+        "INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)",
+        ("old-parent", "proj", None, "Old Parent", old_ms, old_ms),
+    )
+    conn.execute(
+        "INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)",
+        ("old-sub", "proj", "old-parent", "Old Sub", old_ms + 1000, old_ms + 1000),
+    )
+    conn.execute(
+        "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+        ("msg-parent", "old-parent", old_ms, old_ms, _assistant_message()),
+    )
+    conn.execute(
+        "INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)",
+        ("msg-sub", "old-sub", old_ms + 1000, old_ms + 1000, _assistant_message()),
+    )
+    conn.commit()
+    conn.close()
+
+    # The finished session is outside the active window...
+    assert SQLiteProcessor.get_all_active_workflows(db_path) == []
+
+    # ...but can still be loaded by ID, alone or through its sub-agent.
+    workflow = SQLiteProcessor.get_workflow_by_session_id("old-parent", db_path)
+    assert workflow is not None
+    assert workflow["workflow_id"] == "old-parent"
+    assert workflow["sub_agent_count"] == 1
+
+    via_sub = SQLiteProcessor.get_workflow_by_session_id("old-sub", db_path)
+    assert via_sub is not None
+    assert via_sub["workflow_id"] == "old-parent"
+
+    assert SQLiteProcessor.get_workflow_by_session_id("missing", db_path) is None
