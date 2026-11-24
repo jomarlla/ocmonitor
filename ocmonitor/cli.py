@@ -493,7 +493,10 @@ def _display_validation_results(console, validation: dict, ctx) -> bool:
 @click.option(
     "--session-id",
     type=str,
-    help="Track a specific session/workflow ID (main or sub-agent)",
+    help=(
+        "Track a specific session/workflow ID (main or sub-agent); "
+        "a unique ID prefix is accepted"
+    ),
 )
 @click.option(
     "--interactive-switch",

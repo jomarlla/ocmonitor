@@ -161,3 +161,55 @@ def test_get_workflow_by_session_id_loads_finished_session(tmp_path: Path):
     assert via_sub["workflow_id"] == "old-parent"
 
     assert SQLiteProcessor.get_workflow_by_session_id("missing", db_path) is None
+
+
+def test_resolve_session_id_by_unique_prefix(tmp_path: Path):
+    db_path = tmp_path / "opencode.db"
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    _create_base_schema(conn)
+
+    now_ms = int(time.time() * 1000)
+    sessions = [
+        ("ses_abc123", now_ms - 3000),
+        ("ses_abd456", now_ms - 2000),
+        ("ses_xyz789", now_ms - 1000),
+        # Underscore must be matched literally, not as a LIKE wildcard.
+        ("sesXabc000", now_ms),
+    ]
+    for session_id, created in sessions:
+        conn.execute(
+            "INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated) VALUES (?, ?, ?, ?, ?, ?)",
+            (session_id, "proj", None, session_id, created, created),
+        )
+    conn.commit()
+    conn.close()
+
+    # Exact ID wins.
+    assert SQLiteProcessor.resolve_session_id("ses_abc123", db_path) == (
+        "ses_abc123",
+        [],
+    )
+
+    # A unique prefix resolves to the full ID.
+    assert SQLiteProcessor.resolve_session_id("ses_abc", db_path) == (
+        "ses_abc123",
+        [],
+    )
+    assert SQLiteProcessor.resolve_session_id("ses_xyz7", db_path) == (
+        "ses_xyz789",
+        [],
+    )
+
+    # An ambiguous prefix returns all candidates and no full ID.
+    full_id, candidates = SQLiteProcessor.resolve_session_id("ses_ab", db_path)
+    assert full_id is None
+    assert set(candidates) == {"ses_abc123", "ses_abd456"}
+
+    # The underscore is literal: "ses_" does not match "sesXabc000".
+    full_id, candidates = SQLiteProcessor.resolve_session_id("ses_", db_path)
+    assert full_id is None
+    assert set(candidates) == {"ses_abc123", "ses_abd456", "ses_xyz789"}
+
+    assert SQLiteProcessor.resolve_session_id("nope", db_path) == (None, [])
+    assert SQLiteProcessor.resolve_session_id("", db_path) == (None, [])

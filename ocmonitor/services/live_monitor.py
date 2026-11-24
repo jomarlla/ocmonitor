@@ -1526,6 +1526,32 @@ class LiveMonitor:
                 )
                 return
 
+            if selected_session_id:
+                resolved_id, matches = SQLiteProcessor.resolve_session_id(
+                    selected_session_id, db_path
+                )
+                if resolved_id:
+                    if resolved_id != selected_session_id:
+                        self.console.print(
+                            f"[status.info]Resolved session prefix "
+                            f"[metric.value]{selected_session_id}[/metric.value] -> "
+                            f"[metric.value]{resolved_id}[/metric.value][/status.info]"
+                        )
+                    selected_session_id = resolved_id
+                elif matches:
+                    self.console.print(
+                        f"[status.error]Session ID prefix "
+                        f"'{selected_session_id}' is ambiguous. "
+                        f"{len(matches)} sessions match:[/status.error]"
+                    )
+                    for match in matches:
+                        self.console.print(f"  [metric.value]{match}[/metric.value]")
+                    self.console.print(
+                        "[status.info]Provide more characters to disambiguate."
+                        "[/status.info]"
+                    )
+                    return
+
             active_workflows = self._get_sqlite_active_workflows(
                 allow_fallback=not bool(selected_session_id)
             )

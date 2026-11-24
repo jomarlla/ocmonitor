@@ -11,7 +11,7 @@ import statistics
 import time
 from decimal import Decimal
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Generator
+from typing import Dict, List, Optional, Any, Generator, Tuple
 from datetime import datetime
 
 from ..utils.file_utils import FileProcessor
@@ -614,6 +614,60 @@ class SQLiteProcessor:
                 return None
 
             return cls._build_workflow_dict(conn, main_session)
+        finally:
+            conn.close()
+
+    @classmethod
+    def resolve_session_id(
+        cls, partial_id: str, db_path: Optional[Path] = None
+    ) -> Tuple[Optional[str], List[str]]:
+        """Resolve a full session ID or a unique prefix.
+
+        Prefix matching uses ``substr`` instead of ``LIKE`` so underscores in
+        IDs (for example ``ses_df...``) are treated literally.
+
+        Args:
+            partial_id: Full session ID or its leading characters
+            db_path: Path to database (uses default if not provided)
+
+        Returns:
+            ``(full_id, candidates)``. ``full_id`` is set for an exact match or
+            when exactly one session starts with the prefix. Otherwise it is
+            None and ``candidates`` lists all matching IDs (empty if none).
+        """
+        if not partial_id:
+            return None, []
+
+        if db_path is None:
+            db_path = cls.find_database_path()
+
+        if not db_path or not db_path.exists():
+            return None, []
+
+        conn = cls._get_connection(db_path)
+        try:
+            schema = cls._get_schema(conn)
+
+            exact = conn.execute(
+                f"SELECT id FROM {schema['session']} WHERE id = ?",
+                (partial_id,),
+            ).fetchone()
+            if exact:
+                return exact["id"], []
+
+            rows = conn.execute(
+                f"""
+                SELECT id FROM {schema['session']}
+                WHERE substr(id, 1, ?) = ?
+                ORDER BY time_created DESC
+                """,
+                (len(partial_id), partial_id),
+            ).fetchall()
+            candidates = [row["id"] for row in rows]
+
+            if len(candidates) == 1:
+                return candidates[0], []
+            return None, candidates
         finally:
             conn.close()
 
