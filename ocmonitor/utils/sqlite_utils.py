@@ -1157,6 +1157,48 @@ class SQLiteProcessor:
             conn.close()
 
     @classmethod
+    def get_all_workflows(
+        cls, db_path: Optional[Path] = None, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Load workflows for every parent session, newest first.
+
+        Unlike :meth:`get_all_active_workflows`, there is no recency window,
+        so the live picker can browse the full history. Sub-agents are grouped
+        into their parent workflow.
+        """
+        if db_path is None:
+            db_path = cls.find_database_path()
+
+        if not db_path or not db_path.exists():
+            return []
+
+        conn = cls._get_connection(db_path)
+        try:
+            schema = cls._get_schema(conn)
+            parent_rows = conn.execute(
+                f"""
+                SELECT s.*, p.worktree as project_path, p.name as project_name
+                FROM {schema['session']} s
+                LEFT JOIN project p ON s.project_id = p.id
+                WHERE s.parent_id IS NULL
+                ORDER BY s.time_created DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+            workflows = []
+            for parent_row in parent_rows:
+                session = cls.load_session_data(
+                    conn, parent_row, include_zero_token=True
+                )
+                if session and session.files:
+                    workflows.append(cls._build_workflow_dict(conn, session))
+            return workflows
+        finally:
+            conn.close()
+
+    @classmethod
     def get_database_stats(cls, db_path: Optional[Path] = None) -> Dict[str, Any]:
         """Get statistics about the SQLite database.
 

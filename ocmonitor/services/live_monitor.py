@@ -708,11 +708,11 @@ class LiveMonitor:
         """Render selection table for workflows."""
         table = Table(title=title, show_header=True)
         table.add_column("#", justify="right", style="metric.value")
-        table.add_column("Session", style="table.row.main")
-        table.add_column("Project", style="dashboard.project")
-        table.add_column("Workflow", style="dashboard.info")
+        table.add_column("Session", style="table.row.main", overflow="fold")
+        table.add_column("Project", style="dashboard.project", overflow="fold")
+        table.add_column("Workflow", style="dashboard.info", overflow="fold")
         table.add_column("Last Activity", style="table.row.time")
-        table.add_column("ID", style="dim")
+        table.add_column("ID", style="dim", overflow="fold")
 
         for idx, descriptor in enumerate(descriptors, start=1):
             workflow_size = (
@@ -1996,10 +1996,20 @@ class LiveMonitor:
                                 continue
 
                             if command in {"l", "list", "s", "show"}:
+                                # Browse the full history, not just the
+                                # sessions active within the last 30 minutes.
+                                all_workflows = (
+                                    SQLiteProcessor.get_all_workflows()
+                                )
+                                picker_descriptors = (
+                                    self._describe_sqlite_workflows(
+                                        all_workflows
+                                    )
+                                )
                                 selected_from_picker = self._pick_workflow_during_live(
                                     live,
-                                    descriptors,
-                                    "Live Workflow Switcher",
+                                    picker_descriptors,
+                                    "All Sessions",
                                     interactive_switch,
                                 )
                                 if selected_from_picker:
@@ -2016,9 +2026,12 @@ class LiveMonitor:
                                         self.console.print(
                                             f"[status.info]Switched to workflow [metric.value]{selected_session_id}[/metric.value][/status.info]"
                                         )
+                                        # Keep n/p and number jumps cycling
+                                        # through the full session history.
+                                        descriptors = picker_descriptors
                                         immediate_current = (
                                             self._resolve_selected_sqlite_workflow(
-                                                active_workflows, selected_session_id
+                                                all_workflows, selected_session_id
                                             )
                                         )
                                         if immediate_current:
@@ -2074,7 +2087,7 @@ class LiveMonitor:
                                     f"[status.info]Switched to workflow [metric.value]{selected_session_id}[/metric.value][/status.info]"
                                 )
                                 immediate_current = (
-                                    self._resolve_selected_sqlite_workflow(
+                                    self._resolve_pinned_sqlite_workflow(
                                         active_workflows, selected_session_id
                                     )
                                 )

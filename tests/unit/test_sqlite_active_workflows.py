@@ -150,7 +150,10 @@ def test_get_workflow_by_session_id_loads_finished_session(tmp_path: Path):
     # The finished session is outside the active window...
     assert SQLiteProcessor.get_all_active_workflows(db_path) == []
 
-    # ...but can still be loaded by ID, alone or through its sub-agent.
+    # ...but is still listed when browsing all workflows and can be loaded
+    # by ID, alone or through its sub-agent.
+    all_workflows = SQLiteProcessor.get_all_workflows(db_path)
+    assert [w["workflow_id"] for w in all_workflows] == ["old-parent"]
     workflow = SQLiteProcessor.get_workflow_by_session_id("old-parent", db_path)
     assert workflow is not None
     assert workflow["workflow_id"] == "old-parent"
