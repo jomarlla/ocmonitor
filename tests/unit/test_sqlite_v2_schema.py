@@ -376,3 +376,36 @@ def test_session_part_tools_are_combined_with_inline_content(v2_parts_db: Path):
     by_model = {m.model_name: m.total_calls for m in
                 SQLiteProcessor.load_tool_usage_by_model_for_sessions(["ses_p"], v2_parts_db)}
     assert by_model == {"gpt-5.5": 4}
+
+
+def test_load_tool_calls_includes_inputs_and_status(v2_parts_db: Path):
+    calls = SQLiteProcessor.load_tool_calls_for_sessions(["ses_p"], v2_parts_db)
+    by_tool = {}
+    for call in calls:
+        by_tool.setdefault(call["tool"], []).append(call)
+
+    assert set(by_tool) == {"glob", "shell", "edit", "read"}
+    # Mirrored call (inline + session_part) is returned once.
+    assert len(by_tool["glob"]) == 1
+    assert {c["status"] for c in by_tool["shell"]} == {"completed", "running"}
+    assert by_tool["edit"][0]["status"] == "error"
+
+
+def test_load_chat_messages_merges_text_and_tools(v2_parts_db: Path):
+    messages = SQLiteProcessor.load_chat_messages_for_session(
+        "ses_p", v2_parts_db
+    )
+
+    assert len(messages) == 1
+    message = messages[0]
+    assert message["role"] == "assistant"
+
+    texts = [i["text"] for i in message["items"] if i["kind"] == "text"]
+    assert texts == ["hi"]
+
+    tools = [i["tool"] for i in message["items"] if i["kind"] == "tool"]
+    assert sorted(set(tools)) == ["edit", "glob", "read", "shell"]
+    # The fixture has two shell calls (completed and running).
+    assert tools.count("shell") == 2
+    # The glob call mirrored inline and in session_part is not duplicated.
+    assert tools.count("glob") == 1

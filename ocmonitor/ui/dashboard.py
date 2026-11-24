@@ -48,21 +48,25 @@ class DashboardUI:
 
         if workflow and workflow.has_sub_agents:
             # Show workflow info with sub-agent count
+            total_iterations = sum(
+                s.interaction_count for s in workflow.all_sessions
+            )
             header_text = (
-                f"[dashboard.header]OpenCode Live Dashboard[/dashboard.header]  "
                 f"[metric.label]Project:[/metric.label] [dashboard.project]{workflow.project_name}[/dashboard.project]  "
                 f"[metric.label]Session:[/metric.label] [dashboard.session]{workflow.display_title}[/dashboard.session]  "
-                f"[metric.label]Updated:[/metric.label] [metric.value]{current_time}[/metric.value]  "
                 f"[metric.label]Workflow:[/metric.label] [dashboard.info]{workflow.session_count} sessions[/dashboard.info] "
-                f"[metric.label]([/metric.label][metric.value]1 main + {workflow.sub_agent_count} sub[/metric.value][metric.label])[/metric.label]"
+                f"[metric.label]([/metric.label][metric.value]1 main + {workflow.sub_agent_count} sub[/metric.value][metric.label])[/metric.label]\n"
+                f"[metric.label]ID:[/metric.label] [dashboard.info]{session.session_id}[/dashboard.info]  "
+                f"[metric.label]Iterations:[/metric.label] [metric.value]{total_iterations}[/metric.value]  "
+                f"[metric.label]Updated:[/metric.label] [metric.value]{current_time}[/metric.value]"
             )
         else:
             header_text = (
-                f"[dashboard.header]OpenCode Live Dashboard[/dashboard.header]  "
                 f"[metric.label]Project:[/metric.label] [dashboard.project]{session.project_name}[/dashboard.project]  "
-                f"[metric.label]Session:[/metric.label] [dashboard.session]{session.display_title}[/dashboard.session]  "
-                f"[metric.label]Updated:[/metric.label] [metric.value]{current_time}[/metric.value]  "
-                f"[metric.label]Interactions:[/metric.label] [metric.value]{session.interaction_count}[/metric.value]"
+                f"[metric.label]Session:[/metric.label] [dashboard.session]{session.display_title}[/dashboard.session]\n"
+                f"[metric.label]ID:[/metric.label] [dashboard.info]{session.session_id}[/dashboard.info]  "
+                f"[metric.label]Iterations:[/metric.label] [metric.value]{session.interaction_count}[/metric.value]  "
+                f"[metric.label]Updated:[/metric.label] [metric.value]{current_time}[/metric.value]"
             )
 
         return Panel(
@@ -781,14 +785,14 @@ class DashboardUI:
         if controls_hint:
             controls_panel = self.create_controls_panel(controls_hint)
             layout.split_column(
-                Layout(header, size=3),  # Compact header
+                Layout(header, size=5),  # Header: project/session + id/iterations
                 Layout(name="metrics", size=12),  # Tokens + Status + Recent (single row)
                 Layout(name="models_tools", minimum_size=4),  # Model + Tool breakdown
                 Layout(controls_panel, size=3),  # Persistent keybind visibility
             )
         else:
             layout.split_column(
-                Layout(header, size=3),  # Compact header
+                Layout(header, size=5),  # Header: project/session + id/iterations
                 Layout(name="metrics", size=12),  # Tokens + Status + Recent (single row)
                 Layout(name="models_tools", minimum_size=4),  # Model + Tool breakdown
             )

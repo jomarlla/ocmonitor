@@ -1452,3 +1452,122 @@ class TestPinnedSqliteWorkflow:
         )
 
         assert monitor._resolve_pinned_sqlite_workflow([], "missing") is None
+
+
+class TestLiveDetailViews:
+    """Tool/chat drill-down state machine for the live dashboard."""
+
+    @staticmethod
+    def _workflow():
+        class Session:
+            session_id = "ses_1"
+
+        session = Session()
+        return {
+            "workflow_id": "ses_1",
+            "display_title": "Test",
+            "main_session": session,
+            "sub_agents": [],
+            "all_sessions": [session],
+        }
+
+    def test_tool_detail_selection_and_pagination(self, monkeypatch):
+        from ocmonitor.services.live_monitor import LiveMonitor
+
+        monitor = LiveMonitor(pricing_data={}, init_from_db=False)
+        calls = [
+            {
+                "session_id": "ses_1",
+                "tool": "shell",
+                "status": "completed",
+                "input": {"command": f"echo {i}"},
+                "created": 1000 + i,
+                "call_id": f"c{i}",
+            }
+            for i in range(10)
+        ] + [
+            {
+                "session_id": "ses_1",
+                "tool": "read",
+                "status": "error",
+                "input": {"filePath": "/tmp/x"},
+                "created": 2000,
+                "call_id": "r1",
+            }
+        ]
+        monkeypatch.setattr(
+            "ocmonitor.services.live_monitor.SQLiteProcessor.load_tool_calls_for_sessions",
+            lambda session_ids: calls,
+        )
+
+        workflow = self._workflow()
+        monitor._render_live_view = MagicMock(return_value="dashboard")
+        monitor._open_tools_view(workflow)
+        groups = monitor._tool_groups()
+        assert [(g["tool"], g["total"]) for g in groups] == [("shell", 10), ("read", 1)]
+
+        live = MagicMock()
+        assert monitor._handle_detail_command("1", live, workflow, True) is None
+        assert monitor._detail_mode == "tool_calls"
+        assert monitor._detail_tool == "shell"
+
+        # 10 calls / 8 per page -> 2 pages.
+        monitor._detail_offset = 0
+        monitor._handle_detail_command("n", live, workflow, True)
+        assert monitor._detail_offset == 1
+        monitor._handle_detail_command("p", live, workflow, True)
+        assert monitor._detail_offset == 0
+
+        monitor._handle_detail_command("b", live, workflow, True)
+        assert monitor._detail_mode == "tools"
+        assert monitor._detail_tool is None
+
+        monitor._handle_detail_command("b", live, workflow, True)
+        assert monitor._detail_mode is None
+
+    def test_messages_detail_navigation(self, monkeypatch):
+        from ocmonitor.services.live_monitor import LiveMonitor
+
+        monitor = LiveMonitor(pricing_data={}, init_from_db=False)
+        messages = [
+            {
+                "id": f"m{i}",
+                "role": "user" if i % 2 == 0 else "assistant",
+                "created": 1000 + i,
+                "items": [{"kind": "text", "text": f"message {i}"}],
+            }
+            for i in range(10)
+        ]
+        monkeypatch.setattr(
+            "ocmonitor.services.live_monitor.SQLiteProcessor.load_chat_messages_for_session",
+            lambda session_id: messages,
+        )
+
+        workflow = self._workflow()
+        monitor._open_messages_view(workflow)
+        assert len(monitor._detail_messages) == 10
+        assert monitor._detail_messages[0]["session_label"] == "main"
+
+        live = MagicMock()
+        monitor._handle_detail_command("n", live, workflow, True)
+        assert monitor._detail_offset == 1
+        monitor._handle_detail_command("n", live, workflow, True)
+        monitor._handle_detail_command("n", live, workflow, True)
+        # 10 messages / 3 per page -> max offset 3.
+        assert monitor._detail_offset == 3
+        monitor._handle_detail_command("p", live, workflow, True)
+        assert monitor._detail_offset == 2
+
+    def test_format_tool_detail_picks_useful_fields(self):
+        from ocmonitor.services.live_monitor import LiveMonitor
+
+        assert (
+            LiveMonitor._format_tool_detail("shell", {"command": "ls -la\n/tmp"})
+            == "ls -la /tmp"
+        )
+        assert (
+            LiveMonitor._format_tool_detail("read", {"filePath": "/a/b.txt"})
+            == "/a/b.txt"
+        )
+        long = "x" * 300
+        assert len(LiveMonitor._format_tool_detail("shell", {"command": long})) == 240

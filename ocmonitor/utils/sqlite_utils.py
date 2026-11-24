@@ -672,6 +672,227 @@ class SQLiteProcessor:
             conn.close()
 
     @classmethod
+    def load_tool_calls_for_sessions(
+        cls, session_ids: List[str], db_path: Optional[Path] = None
+    ) -> List[Dict[str, Any]]:
+        """Load individual tool calls (name, status and input) for sessions."""
+        if not session_ids:
+            return []
+
+        if db_path is None:
+            db_path = cls.find_database_path()
+
+        if not db_path or not db_path.exists():
+            return []
+
+        conn = cls._get_connection(db_path)
+        try:
+            schema = cls._get_schema(conn)
+            data = schema["tool_data"]
+            name_path = schema["tool_name_path"]
+            placeholders = ",".join("?" * len(session_ids))
+
+            rows = conn.execute(
+                f"""
+                SELECT
+                    p.session_id AS session_id,
+                    json_extract({data}, '{name_path}') AS tool,
+                    json_extract({data}, '$.state.status') AS status,
+                    COALESCE(
+                        json_extract({data}, '$.state.input'),
+                        json_extract({data}, '$.input')
+                    ) AS input_json,
+                    COALESCE(
+                        json_extract({data}, '$.time.created'),
+                        json_extract({data}, '$.time.start')
+                    ) AS created,
+                    json_extract({data}, '$.id') AS call_id
+                FROM {schema['tool_from']}
+                WHERE {schema['tool_session']} IN ({placeholders})
+                  AND json_valid({data}) = 1
+                  AND json_extract({data}, '{name_path}') IS NOT NULL
+                ORDER BY created
+                """,
+                session_ids,
+            ).fetchall()
+
+            calls = []
+            for row in rows:
+                raw_input = row["input_json"]
+                try:
+                    tool_input = json.loads(raw_input) if raw_input else {}
+                except (TypeError, json.JSONDecodeError):
+                    tool_input = {"raw": raw_input}
+
+                calls.append(
+                    {
+                        "session_id": row["session_id"],
+                        "tool": row["tool"],
+                        "status": row["status"] or "unknown",
+                        "input": tool_input,
+                        "created": row["created"],
+                        "call_id": row["call_id"],
+                    }
+                )
+            return calls
+        finally:
+            conn.close()
+
+    @classmethod
+    def load_chat_messages_for_session(
+        cls, session_id: str, db_path: Optional[Path] = None
+    ) -> List[Dict[str, Any]]:
+        """Load user/assistant messages and tool calls in chronological order.
+
+        Text and tool parts may live inline in the message content, in the
+        legacy ``part`` table or in the newer ``session_part`` table, so all
+        sources are merged (deduplicating tool calls by id).
+        """
+        if db_path is None:
+            db_path = cls.find_database_path()
+
+        if not db_path or not db_path.exists():
+            return []
+
+        conn = cls._get_connection(db_path)
+        try:
+            tables = {
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' "
+                    "AND name IN ('message', 'session_message', 'part', "
+                    "'session_part')"
+                )
+            }
+
+            message_rows = []
+            if "session_message" in tables:
+                message_rows.extend(
+                    conn.execute(
+                        "SELECT id, type AS role, time_created, data "
+                        "FROM session_message WHERE session_id = ?",
+                        (session_id,),
+                    ).fetchall()
+                )
+            if "message" in tables:
+                known_ids = {row["id"] for row in message_rows}
+                for row in conn.execute(
+                    "SELECT id, NULL AS role, time_created, data "
+                    "FROM message WHERE session_id = ?",
+                    (session_id,),
+                ):
+                    if row["id"] not in known_ids:
+                        message_rows.append(row)
+
+            message_rows.sort(key=lambda row: row["time_created"] or 0)
+
+            parts_by_message: Dict[str, List[Any]] = {}
+            part_sources = []
+            if "session_part" in tables:
+                part_sources.append(
+                    "SELECT message_id, data FROM session_part "
+                    "WHERE session_id = ? ORDER BY ordinal"
+                )
+            if "part" in tables:
+                part_sources.append(
+                    "SELECT message_id, data FROM part "
+                    "WHERE session_id = ? ORDER BY time_created"
+                )
+            for query in part_sources:
+                for row in conn.execute(query, (session_id,)):
+                    parts_by_message.setdefault(row["message_id"], []).append(
+                        row["data"]
+                    )
+
+            messages = []
+            for row in message_rows:
+                try:
+                    raw = json.loads(row["data"])
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                if not isinstance(raw, dict):
+                    continue
+
+                role = row["role"] or raw.get("role") or "unknown"
+                items: List[Dict[str, Any]] = []
+                seen_tool_ids = set()
+                seen_texts = set()
+
+                def add_text(text: Any):
+                    if not isinstance(text, str) or not text.strip():
+                        return
+                    if text in seen_texts:
+                        return
+                    seen_texts.add(text)
+                    items.append({"kind": "text", "text": text})
+
+                def add_tool(tool: Any, status: Any, tool_input: Any, call_id: Any):
+                    if not tool:
+                        return
+                    if call_id and call_id in seen_tool_ids:
+                        return
+                    if call_id:
+                        seen_tool_ids.add(call_id)
+                    items.append(
+                        {
+                            "kind": "tool",
+                            "tool": tool,
+                            "status": status or "unknown",
+                            "input": tool_input or {},
+                        }
+                    )
+
+                content = raw.get("content")
+                if isinstance(content, list):
+                    for item in content:
+                        if not isinstance(item, dict):
+                            continue
+                        kind = item.get("type")
+                        if kind == "text":
+                            add_text(item.get("text"))
+                        elif kind == "tool":
+                            add_tool(
+                                item.get("name") or item.get("tool"),
+                                (item.get("state") or {}).get("status"),
+                                (item.get("state") or {}).get("input"),
+                                item.get("id"),
+                            )
+                elif "text" in raw:
+                    add_text(raw.get("text"))
+
+                for part_data in parts_by_message.get(row["id"], []):
+                    try:
+                        part = json.loads(part_data)
+                    except (TypeError, json.JSONDecodeError):
+                        continue
+                    if not isinstance(part, dict):
+                        continue
+                    kind = part.get("type")
+                    if kind == "text":
+                        add_text(part.get("text"))
+                    elif kind == "tool":
+                        add_tool(
+                            part.get("name") or part.get("tool"),
+                            (part.get("state") or {}).get("status"),
+                            (part.get("state") or {}).get("input"),
+                            part.get("id") or part.get("callID"),
+                        )
+
+                if items:
+                    messages.append(
+                        {
+                            "id": row["id"],
+                            "role": role,
+                            "created": row["time_created"],
+                            "items": items,
+                        }
+                    )
+
+            return messages
+        finally:
+            conn.close()
+
+    @classmethod
     def get_workflow_by_session_id(
         cls, session_id: str, db_path: Optional[Path] = None
     ) -> Optional[Dict[str, Any]]:

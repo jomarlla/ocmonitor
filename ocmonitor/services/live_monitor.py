@@ -1,5 +1,6 @@
 """Live monitoring service for OpenCode Monitor."""
 
+import json
 import os
 import select
 import sys
@@ -9,11 +10,12 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, cast
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 
 from ..config import ModelPricing, PathsConfig
 from ..models.session import InteractionFile, SessionData, TokenUsage
@@ -128,6 +130,15 @@ class LiveMonitor:
         self._stdin_termios_state: Optional[Any] = None
         self._input_buffer: str = ""
         self._live_status_line: Optional[str] = None
+        # Detail views (tools / chat) opened from the live dashboard.
+        self._detail_mode: Optional[str] = None
+        self._detail_tool: Optional[str] = None
+        self._detail_calls: List[Dict[str, Any]] = []
+        self._detail_messages: List[Dict[str, Any]] = []
+        self._detail_offset: int = 0
+        self._detail_page_size: int = 8
+        self._message_page_size: int = 3
+        self._detail_workflow_id: Optional[str] = None
         if init_from_db:
             self._initialize_active_workflows()
 
@@ -318,6 +329,317 @@ class LiveMonitor:
             workflows.insert(0, workflow)
         return workflow
 
+    # ------------------------------------------------------------------
+    # Live dashboard detail views: tools and chat
+    # ------------------------------------------------------------------
+
+    def _render_live_view(
+        self, workflow: Dict[str, Any], interactive_switch: bool
+    ):
+        """Render the dashboard or the active detail view."""
+        if self._detail_mode:
+            return self._render_detail_view(workflow)
+        return self._generate_sqlite_workflow_dashboard(
+            workflow, self._controls_hint(interactive_switch)
+        )
+
+    def _open_tools_view(self, workflow: Dict[str, Any]):
+        """Load tool calls for the workflow and show the grouped tool list."""
+        self._detail_mode = "tools"
+        self._detail_tool = None
+        self._detail_offset = 0
+        self._detail_workflow_id = workflow.get("workflow_id")
+        session_ids = [s.session_id for s in workflow.get("all_sessions", [])]
+        self._detail_calls = SQLiteProcessor.load_tool_calls_for_sessions(
+            session_ids
+        )
+
+    def _open_messages_view(self, workflow: Dict[str, Any]):
+        """Load chat messages from every session in the workflow."""
+        self._detail_mode = "messages"
+        self._detail_tool = None
+        self._detail_offset = 0
+        self._detail_workflow_id = workflow.get("workflow_id")
+        labels = self._session_labels(workflow)
+
+        messages: List[Dict[str, Any]] = []
+        for session in workflow.get("all_sessions", []):
+            for message in SQLiteProcessor.load_chat_messages_for_session(
+                session.session_id
+            ):
+                message["session_label"] = labels.get(
+                    session.session_id, session.session_id[:8]
+                )
+                messages.append(message)
+        messages.sort(key=lambda m: m.get("created") or 0)
+        self._detail_messages = messages
+
+    def _session_labels(self, workflow: Dict[str, Any]) -> Dict[str, str]:
+        """Map session ids to short labels (main, sub1, ...)."""
+        labels: Dict[str, str] = {}
+        main = workflow.get("main_session")
+        if main:
+            labels[main.session_id] = "main"
+        for index, sub in enumerate(workflow.get("sub_agents") or [], start=1):
+            labels[sub.session_id] = f"sub{index}"
+        return labels
+
+    def _tool_groups(self) -> List[Dict[str, Any]]:
+        """Aggregate loaded tool calls by tool name."""
+        groups: Dict[str, Dict[str, Any]] = {}
+        for call in self._detail_calls:
+            tool = call.get("tool") or "unknown"
+            group = groups.setdefault(
+                tool, {"tool": tool, "total": 0, "ok": 0, "failed": 0}
+            )
+            group["total"] += 1
+            status = call.get("status")
+            if status in {"completed", "success"}:
+                group["ok"] += 1
+            elif status == "error":
+                group["failed"] += 1
+        return sorted(groups.values(), key=lambda g: (-g["total"], g["tool"]))
+
+    @staticmethod
+    def _format_tool_detail(
+        tool: str, tool_input: Any, max_len: int = 240
+    ) -> str:
+        """Pick the most useful input field and flatten it to one line."""
+        if isinstance(tool_input, dict):
+            text = ""
+            for key in (
+                "command",
+                "filePath",
+                "file_path",
+                "path",
+                "pattern",
+                "query",
+                "url",
+                "description",
+                "prompt",
+                "name",
+                "oldString",
+            ):
+                value = tool_input.get(key)
+                if isinstance(value, str) and value.strip():
+                    text = value.strip()
+                    break
+            if not text:
+                try:
+                    text = json.dumps(tool_input, ensure_ascii=False)
+                except (TypeError, ValueError):
+                    text = str(tool_input)
+        else:
+            text = str(tool_input)
+
+        text = " ".join(text.split())
+        if len(text) > max_len:
+            text = text[: max_len - 1] + "…"
+        return text
+
+    def _detail_page_count(self) -> int:
+        """Number of pages for the active detail view."""
+        if self._detail_mode == "tool_calls":
+            total = sum(
+                1 for c in self._detail_calls if c.get("tool") == self._detail_tool
+            )
+            size = self._detail_page_size
+        elif self._detail_mode == "messages":
+            total = len(self._detail_messages)
+            size = self._message_page_size
+        else:
+            return 1
+        return max(1, (total + size - 1) // size)
+
+    def _render_detail_view(self, workflow: Dict[str, Any]):
+        """Render the active detail view (tool groups, calls or chat)."""
+        if self._detail_mode == "tools":
+            return self._render_tools_summary(workflow)
+        if self._detail_mode == "tool_calls":
+            return self._render_tool_calls(workflow)
+        return self._render_messages(workflow)
+
+    def _render_tools_summary(self, workflow: Dict[str, Any]):
+        """Grouped tool list with counts, selectable by number."""
+        groups = self._tool_groups()
+        hint = Text(
+            "1..9 = select tool · b = back · q = quit", style="dim"
+        )
+
+        if not groups:
+            return Group(
+                Panel(Text("No tool calls found."), title="Tool Calls"),
+                hint,
+            )
+
+        table = Table(
+            title=f"Tool Calls — {workflow.get('display_title', '')}",
+            show_header=True,
+            header_style="table.header",
+            title_style="table.title",
+        )
+        table.add_column("#", justify="right", style="table.row.time")
+        table.add_column("Tool", style="table.row.main")
+        table.add_column("Calls", justify="right", style="table.row.tokens")
+        table.add_column("OK", justify="right", style="status.success")
+        table.add_column("Failed", justify="right", style="status.error")
+
+        for index, group in enumerate(groups, start=1):
+            table.add_row(
+                str(index) if index <= 9 else "",
+                group["tool"],
+                str(group["total"]),
+                str(group["ok"]),
+                str(group["failed"]),
+            )
+        return Group(table, hint)
+
+    def _render_tool_calls(self, workflow: Dict[str, Any]):
+        """Individual calls for the selected tool, paginated."""
+        calls = [
+            c for c in self._detail_calls if c.get("tool") == self._detail_tool
+        ]
+        page_size = self._detail_page_size
+        pages = max(1, (len(calls) + page_size - 1) // page_size)
+        page = min(self._detail_offset, pages - 1)
+        labels = self._session_labels(workflow)
+
+        table = Table(
+            title=(
+                f"{self._detail_tool} calls — {len(calls)} total "
+                f"(page {page + 1}/{pages})"
+            ),
+            show_header=True,
+            header_style="table.header",
+            title_style="table.title",
+        )
+        table.add_column("Time", style="table.row.time", no_wrap=True)
+        table.add_column("Session", style="table.row.model")
+        table.add_column("Status", style="table.row.model")
+        table.add_column("Command / input", style="table.row.main", overflow="fold")
+
+        for call in calls[page * page_size : (page + 1) * page_size]:
+            created = call.get("created")
+            when = (
+                datetime.fromtimestamp(created / 1000).strftime("%H:%M:%S")
+                if created
+                else "-"
+            )
+            status = call.get("status") or "unknown"
+            status_style = (
+                "status.success"
+                if status in {"completed", "success"}
+                else "status.error"
+                if status == "error"
+                else "table.row.time"
+            )
+            table.add_row(
+                when,
+                labels.get(call.get("session_id"), "?"),
+                Text(status, style=status_style),
+                Text(self._format_tool_detail(call.get("tool"), call.get("input"))),
+            )
+
+        hint = Text(
+            f"page {page + 1}/{pages} · n = next · p = prev · "
+            "b = back · q = quit",
+            style="dim",
+        )
+        return Group(table, hint)
+
+    def _render_messages(self, workflow: Dict[str, Any]):
+        """Chat transcript for the workflow, paginated by messages."""
+        messages = self._detail_messages
+        page_size = self._message_page_size
+        pages = max(1, (len(messages) + page_size - 1) // page_size)
+        page = min(self._detail_offset, pages - 1)
+
+        body = Text()
+        for message in messages[page * page_size : (page + 1) * page_size]:
+            created = message.get("created")
+            when = (
+                datetime.fromtimestamp(created / 1000).strftime("%H:%M:%S")
+                if created
+                else "-"
+            )
+            role = message.get("role") or "unknown"
+            body.append(f"{when} ", style="table.row.time")
+            body.append(role, style="status.info" if role == "user" else "table.row.main")
+            body.append(f" [{message.get('session_label', '?')}]\n", style="dim")
+
+            for item in message.get("items", []):
+                if item.get("kind") == "text":
+                    text = item.get("text", "")
+                    if len(text) > 600:
+                        text = text[:600] + f"… (+{len(text) - 600} chars)"
+                    body.append(text + "\n")
+                else:
+                    detail = self._format_tool_detail(
+                        item.get("tool"), item.get("input"), max_len=180
+                    )
+                    body.append(
+                        f"  ⚙ {item.get('tool')} ({item.get('status')}): "
+                        f"{detail}\n",
+                        style="table.row.model",
+                    )
+            body.append("\n")
+
+        if not messages:
+            body.append("No messages found.")
+
+        panel = Panel(
+            body,
+            title=f"Chat — page {page + 1}/{pages}",
+            border_style="dashboard.border",
+            title_align="left",
+        )
+        hint = Text(
+            "n = next page · p = previous page · b = back · q = quit",
+            style="dim",
+        )
+        return Group(panel, hint)
+
+    def _handle_detail_command(
+        self,
+        command: str,
+        live: Any,
+        workflow: Dict[str, Any],
+        interactive_switch: bool,
+    ) -> Optional[str]:
+        """Handle a key in a detail view. Returns 'quit' to stop monitoring."""
+        if command in {"q", "quit", "exit"}:
+            return "quit"
+
+        if command in {"b", "back"}:
+            if self._detail_mode == "tool_calls":
+                self._detail_mode = "tools"
+                self._detail_tool = None
+            else:
+                self._detail_mode = None
+                self._detail_tool = None
+                self._detail_calls = []
+                self._detail_messages = []
+            self._detail_offset = 0
+            live.update(self._render_live_view(workflow, interactive_switch))
+            return None
+
+        if self._detail_mode == "tools" and command.isdigit():
+            index = int(command) - 1
+            groups = self._tool_groups()
+            if 0 <= index < min(9, len(groups)):
+                self._detail_tool = groups[index]["tool"]
+                self._detail_mode = "tool_calls"
+                self._detail_offset = 0
+        elif command in {"n", "next"}:
+            self._detail_offset = min(
+                self._detail_offset + 1, self._detail_page_count() - 1
+            )
+        elif command in {"p", "prev", "previous"}:
+            self._detail_offset = max(0, self._detail_offset - 1)
+
+        live.update(self._render_detail_view(workflow))
+        return None
+
     def _resolve_selected_file_workflow(
         self, workflows: List[SessionWorkflow], selected_session_id: str
     ) -> Optional[SessionWorkflow]:
@@ -460,7 +782,7 @@ class LiveMonitor:
         if not interactive_switch:
             return None
         base_hint = (
-            "Workflow switching keys: n=next, p=prev, l=list, 1..9=jump, q=quit."
+            "Keys: n=next, p=prev, l=list, 1..9=jump, t=tools, m=messages, q=quit."
         )
         if self._live_status_line:
             return f"{base_hint}  Status: {self._live_status_line}"
@@ -577,12 +899,18 @@ class LiveMonitor:
                 return None
 
             # Fast path for ergonomic keybinds.
-            if ch in {"n", "p", "l", "q"} or ch.isdigit():
+            if ch in {"n", "p", "l", "q", "t", "m", "b"} or ch.isdigit():
                 self._input_buffer = ""
                 if ch == "l":
                     return "list"
                 if ch == "q":
                     return "quit"
+                if ch == "t":
+                    return "tools"
+                if ch == "m":
+                    return "messages"
+                if ch == "b":
+                    return "back"
                 return ch
 
             # Optional support for full-word commands when typed quickly.
@@ -596,6 +924,10 @@ class LiveMonitor:
                     "show",
                     "quit",
                     "exit",
+                    "tools",
+                    "messages",
+                    "chat",
+                    "back",
                 }:
                     command = self._input_buffer
                     self._input_buffer = ""
@@ -1631,6 +1963,38 @@ class LiveMonitor:
                     if interactive_switch:
                         command = self._poll_live_switch_command()
                         if command:
+                            if self._detail_mode:
+                                outcome = self._handle_detail_command(
+                                    command,
+                                    live,
+                                    current_workflow,
+                                    interactive_switch,
+                                )
+                                if outcome == "quit":
+                                    self.console.print(
+                                        "\n[status.warning]Live monitoring stopped."
+                                        "[/status.warning]"
+                                    )
+                                    break
+                                continue
+
+                            if command in {"t", "tools"}:
+                                self._open_tools_view(current_workflow)
+                                live.update(
+                                    self._render_live_view(
+                                        current_workflow, interactive_switch
+                                    )
+                                )
+                                continue
+                            if command in {"m", "messages", "c", "chat"}:
+                                self._open_messages_view(current_workflow)
+                                live.update(
+                                    self._render_live_view(
+                                        current_workflow, interactive_switch
+                                    )
+                                )
+                                continue
+
                             if command in {"l", "list", "s", "show"}:
                                 selected_from_picker = self._pick_workflow_during_live(
                                     live,
@@ -1775,10 +2139,18 @@ class LiveMonitor:
                         s.session_id for s in current_workflow["all_sessions"]
                     )
 
+                    if (
+                        self._detail_mode
+                        and self._detail_workflow_id
+                        != current_workflow.get("workflow_id")
+                    ):
+                        self._detail_mode = None
+                        self._detail_tool = None
+                        self._detail_calls = []
+                        self._detail_messages = []
+
                     live.update(
-                        self._generate_sqlite_workflow_dashboard(
-                            current_workflow, self._controls_hint(interactive_switch)
-                        )
+                        self._render_live_view(current_workflow, interactive_switch)
                     )
                     next_refresh_at = time.time() + refresh_interval
 
