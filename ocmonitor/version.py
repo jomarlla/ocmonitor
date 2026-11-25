@@ -5,14 +5,14 @@ from importlib.metadata import PackageNotFoundError, version as distribution_ver
 from . import __version__ as FALLBACK_VERSION
 
 
-_DISTRIBUTION_NAME = "opencode-monitor"
+_DISTRIBUTION_NAME = "ocmonitor"
 
 
 def get_version() -> str:
     """Return installed package version with safe fallback.
 
     Resolution order:
-    1. `opencode-monitor` distribution metadata (PyPI package name)
+    1. `ocmonitor` distribution metadata (PyPI package name)
     2. Local fallback version from `ocmonitor.__version__`
     """
     try:

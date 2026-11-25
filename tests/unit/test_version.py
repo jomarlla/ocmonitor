@@ -8,12 +8,12 @@ import ocmonitor.version as version_module
 class TestVersionResolution:
     """Tests for get_version fallback behavior."""
 
-    def test_reads_opencode_monitor_distribution(self, monkeypatch):
+    def test_reads_ocmonitor_distribution(self, monkeypatch):
         calls = []
 
         def fake_distribution_version(name):
             calls.append(name)
-            if name == "opencode-monitor":
+            if name == "ocmonitor":
                 return "1.0.4"
             raise PackageNotFoundError(name)
 
@@ -24,7 +24,7 @@ class TestVersionResolution:
         )
 
         assert version_module.get_version() == "1.0.4"
-        assert calls == ["opencode-monitor"]
+        assert calls == ["ocmonitor"]
 
     def test_uses_local_fallback_when_metadata_missing(self, monkeypatch):
         def fake_distribution_version(name):

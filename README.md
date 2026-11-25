@@ -1,6 +1,6 @@
 # 📊 OpenCode Monitor
 
-[![PyPI version](https://img.shields.io/pypi/v/opencode-monitor.svg)](https://pypi.org/project/opencode-monitor/)
+[![PyPI version](https://img.shields.io/pypi/v/ocmonitor.svg)](https://pypi.org/project/ocmonitor/)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -70,27 +70,30 @@ All original commands, options and reports remain available. The MIT license and
 
 ### Installation
 
-> **Note:** this fork is not published on PyPI. `pip install opencode-monitor` installs the upstream package. To install this fork use Option 5 (source) or:
+> **Note:** the distribution name of this fork is **`ocmonitor`** (the upstream PyPI package is `opencode-monitor`, a different project). `ocmonitor` is not published on PyPI yet; until then install directly from this repository:
 >
 > ```bash
 > pipx install "git+https://github.com/jomarlla/ocmonitor.git"
 > ```
 
-**Option 1: pip / PyPI (Recommended for upstream)**
+**Option 1: pip / PyPI (when published)**
 
 ```bash
-pip install opencode-monitor
+pip install ocmonitor
 ```
 
 With optional extras:
 ```bash
-pip install "opencode-monitor[charts,export]"
+pip install "ocmonitor[charts,export]"
 ```
 
 **Option 2: uvx (Run without installing)**
 
 ```bash
-uvx opencode-monitor live
+# Once published
+uvx ocmonitor live
+# From this repository
+uvx --from "git+https://github.com/jomarlla/ocmonitor.git" ocmonitor live
 ```
 
 **Option 3: uv tool install**
@@ -98,13 +101,15 @@ uvx opencode-monitor live
 [uv](https://github.com/astral-sh/uv) installs the tool in an isolated environment.
 
 ```bash
-uv tool install opencode-monitor
+uv tool install ocmonitor
+# Or from this repository
+uv tool install "git+https://github.com/jomarlla/ocmonitor.git"
 
 # With optional extras
-uv tool install "opencode-monitor[charts,export]"
+uv tool install "ocmonitor[charts,export]"
 
 # Easy to upgrade
-uv tool upgrade opencode-monitor
+uv tool upgrade ocmonitor
 ```
 
 **Option 4: pipx Installation (Cross Platform)**
@@ -112,12 +117,14 @@ uv tool upgrade opencode-monitor
 [pipx](https://pypa.github.io/pipx/) creates isolated environments and works on all platforms (including Arch Linux, Ubuntu, macOS, etc.).
 
 ```bash
-pipx install opencode-monitor
+pipx install ocmonitor
+# Or from this repository
+pipx install "git+https://github.com/jomarlla/ocmonitor.git"
 ```
 
 With optional extras:
 ```bash
-pipx install "opencode-monitor[charts,export]"
+pipx install "ocmonitor[charts,export]"
 ```
 
 **Option 5: Install from source**

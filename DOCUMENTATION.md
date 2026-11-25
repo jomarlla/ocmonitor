@@ -2037,7 +2037,7 @@ $EDITOR ~/.config/ocmonitor/config.toml
 ocmonitor --version
 
 # Upgrade
-pipx upgrade opencode-monitor       # or: pip install --upgrade opencode-monitor
+pipx upgrade ocmonitor       # or: pip install --upgrade ocmonitor
 
 # Confirm the database uses the v2 schema
 sqlite3 ~/.local/share/opencode/opencode.db ".tables" | grep session_v2

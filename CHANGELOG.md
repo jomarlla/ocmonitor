@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🍴 Fork additions (jomarlla/ocmonitor)
 
+- **Distribution renamed to `ocmonitor`** — separates this fork from the upstream `opencode-monitor` PyPI project. The CLI command remains `ocmonitor`; only the package/distribution name changes. Uninstall any previous `opencode-monitor` install before installing this one
 - **OpenCode 2.4+ tool statistics** — read tool calls from the new `session_part` table and merge them with inline message content, deduplicating by call id. Sessions that reported `0` tools now show their real usage
 - **Live header** — displays the session ID and total iterations (workflow totals with sub-agents)
 - **Live tool drill-down (`t`)** — grouped tool counts; `1..9` opens individual calls with time, session, status and command/path/query; `n`/`p` page

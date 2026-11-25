@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "opencode-monitor"
+name = "ocmonitor"
 version = "1.0.5"
 description = "Analytics and monitoring tool for OpenCode AI coding sessions"
 readme = "README.md"
