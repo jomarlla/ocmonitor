@@ -58,8 +58,8 @@ export = [
 ocmonitor = "ocmonitor.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/Shlomob/ocmonitor-share"
-Repository = "https://github.com/Shlomob/ocmonitor-share"
+Homepage = "https://github.com/jomarlla/ocmonitor"
+Repository = "https://github.com/jomarlla/ocmonitor"
 
 [tool.setuptools]
 packages = ["ocmonitor", "ocmonitor.models", "ocmonitor.services", "ocmonitor.ui", "ocmonitor.utils"]

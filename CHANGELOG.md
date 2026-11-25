@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Over-quota sessions show their real percentage** — `SessionData.duration_percentage`, the live monitor session group, and the live dashboard's 5-hour time bars no longer cap at 100%. A session that ran 7.5 hours now displays `150.0%` with a full bar instead of flattening to `100.0%`. Note: `duration_percentage` is a computed field in JSON exports, so exported values can now exceed 100
 
+### 🍴 Fork additions (jomarlla/ocmonitor)
+
+- **OpenCode 2.4+ tool statistics** — read tool calls from the new `session_part` table and merge them with inline message content, deduplicating by call id. Sessions that reported `0` tools now show their real usage
+- **Live header** — displays the session ID and total iterations (workflow totals with sub-agents)
+- **Live tool drill-down (`t`)** — grouped tool counts; `1..9` opens individual calls with time, session, status and command/path/query; `n`/`p` page
+- **Live chat view (`m`)** — user/assistant messages and tool summaries for the workflow, with paging
+- **Full-history picker (`l`)** — lists every stored session, not only the active 30-minute window, and switches immediately
+- **Historical `--session-id`** — finished sessions can be pinned; unique ID prefixes are accepted, ambiguous prefixes list candidates
+- **Width-aware `sessions` table** — full `Session ID` column; compact wrapped layout on narrow terminals, no ellipsis cropping
+
 ## [1.0.5] - 2026-10-22
 
 ### 🌐 Provider-Aware Model Pricing

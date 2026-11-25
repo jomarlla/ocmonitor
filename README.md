@@ -10,6 +10,8 @@ Transform your OpenCode usage data into beautiful, actionable insights with comp
 
 **⚠️ Disclaimer** - This application is not affiliated with OpenCode AI. It is an independent community tool for monitoring OpenCode usage.
 
+> **🍴 This repository is a fork of [Shlomob/ocmonitor-share](https://github.com/Shlomob/ocmonitor-share)**, maintained by [jomarlla](https://github.com/jomarlla). It keeps the original features and documentation and adds support for newer OpenCode storage, historical sessions in the live dashboard, tool/chat drill-down and width-aware tables. See [Changes in this fork](#-changes-in-this-fork).
+
 [![Sessions Summary Screenshot](screenshots/sessions-summary.png)](screenshots/sessions-summary.png)
 
 ## 🌟 Features
@@ -28,6 +30,7 @@ Transform your OpenCode usage data into beautiful, actionable insights with comp
 
 ### 🗄️ Storage Support
 - **SQLite Database** - Native support for OpenCode v1.2.0+ SQLite format (`~/.local/share/opencode/opencode.db`), including the OpenCode v2 schema (`session_v2` / `session_message`)
+- **OpenCode 2.4+ Parts** - Reads tool calls from `session_part` as well as inline message content, so tool statistics work with current OpenCode versions
 - **OpenCode v2 Upgrades** - Databases upgraded to OpenCode v2 still show pre-upgrade history, including sessions OpenCode's migration did not copy to the new tables
 - **Legacy File Support** - Backwards compatible with pre-v1.2.0 JSON file storage
 - **Auto Detection** - Automatically detects and uses the appropriate storage backend
@@ -37,9 +40,11 @@ Transform your OpenCode usage data into beautiful, actionable insights with comp
 - **🌈 Rich Terminal UI** - Professional design with clean styling and optimal space utilization
 - **📊 Progress Bars** - Visual indicators for cost quotas, context usage, and session time
 - **🚥 Color Coding** - Green/yellow/red status indicators based on usage thresholds
-- **📱 Live Dashboard** - Real-time monitoring with project names and session titles
+- **📱 Live Dashboard** - Real-time monitoring with project names, titles, session ID and iteration count
 - **⏰ Session Time Tracking** - 5-hour session progress bar with color-coded time alerts (sessions that run past the quota show their real percentage, e.g. `150.0%`)
 - **🔧 Tool Usage Panel** - Track tool success rates (bash, read, edit, etc.) in live dashboard
+- **🔎 Tool & Chat Drill-down** - Press `t` to inspect individual tool calls (commands, paths, queries) and `m` to read the chat transcript, with keyboard paging
+- **📋 Session IDs** - The `sessions` table includes a full `Session ID` column and adapts to narrow terminals instead of cropping values
 
 ### 📤 Data Export & Integration
 - **📋 CSV Export** - Spreadsheet-compatible exports with metadata
@@ -47,11 +52,31 @@ Transform your OpenCode usage data into beautiful, actionable insights with comp
 - **📊 Multiple Report Types** - Sessions, daily, weekly, monthly, model, and project reports
 - **📈 Prometheus Metrics** - Real-time metrics endpoint for Grafana/Prometheus integration
 
+## 🍴 Changes in this fork
+
+This fork builds on upstream `ocmonitor-share` and focuses on newer OpenCode versions and the live workflow:
+
+- **Tool statistics on OpenCode 2.4+** — tool calls are read from the new `session_part` table and merged with inline message content, deduplicating calls. Sessions that previously showed `0` tools now report their real counts.
+- **Live dashboard header** — shows the session **ID** and total **iterations** (workflow totals when sub-agents are present).
+- **Live tool drill-down (`t`)** — group calls by tool, select a group (`1..9`) and see each call's time, session, status and command/path/query.
+- **Live chat view (`m`)** — read user/assistant messages and tool summaries for the whole workflow, with `n`/`p` paging.
+- **Live session picker (`l`)** — lists the **full session history**, not only sessions active in the last 30 minutes; selecting one switches the dashboard immediately.
+- **Historical sessions** — `--session-id` pins old/finished sessions too, and accepts a **unique prefix** instead of the full ID.
+- **Width-aware `sessions` table** — includes a full `Session ID` column and switches to a compact wrapped layout on narrow terminals so values are never cropped.
+
+All original commands, options and reports remain available. The MIT license and upstream attribution are preserved.
+
 ## 🚀 Quick Start
 
 ### Installation
 
-**Option 1: pip / PyPI (Recommended)**
+> **Note:** this fork is not published on PyPI. `pip install opencode-monitor` installs the upstream package. To install this fork use Option 5 (source) or:
+>
+> ```bash
+> pipx install "git+https://github.com/jomarlla/ocmonitor.git"
+> ```
+
+**Option 1: pip / PyPI (Recommended for upstream)**
 
 ```bash
 pip install opencode-monitor
@@ -97,8 +122,8 @@ pipx install "opencode-monitor[charts,export]"
 
 **Option 5: Install from source**
 ```bash
-git clone https://github.com/Shlomob/ocmonitor-share.git
-cd ocmonitor-share
+git clone https://github.com/jomarlla/ocmonitor.git
+cd ocmonitor
 python3 -m pip install -e .
 ```
 
@@ -225,6 +250,11 @@ ocmonitor agents
 - Sub-agent count displayed in the Agent column (e.g., `+2` means 2 sub-agents)
 - Use `--no-group` to see individual sessions without grouping
 
+**Session IDs and narrow terminals:**
+- Every row includes the full `Session ID` (main sessions, sub-agents and workflow headers)
+- In wide terminals the detailed table is used; below 220 columns (245 with `--no-group`) the table switches to a compact two-column layout with the date, title, ID and metrics stacked
+- Long values wrap instead of being cropped with `…`, so the complete ID and model are always visible
+
 ### Time-Based Reporting
 
 #### `ocmonitor daily|weekly|monthly <path> [--breakdown]`
@@ -269,16 +299,37 @@ ocmonitor live --pick
 # Pin live monitor to a specific workflow/session ID
 ocmonitor live --session-id ses_abc123
 
+# A unique prefix is enough; ambiguous prefixes list the matches
+ocmonitor live --session-id ses_abc
+
+# Pin a finished/historical session (no 30-minute limit)
+ocmonitor live --session-id ses_abc123
+
 # Force a specific data source
 ocmonitor live --source sqlite    # Force SQLite (v1.2.0+)
 ocmonitor live --source files     # Force legacy file storage
 
-# Enable interactive switching while live monitor runs (experimental)
+# Enable the interactive controls described below
 ocmonitor live --interactive-switch
 ```
 
-If `--session-id` is pinned and the selected workflow is no longer active, live monitoring stops with a clear message.
+`--session-id` accepts finished and historical sessions as well as active ones, and resolves a unique ID prefix. If several sessions match the prefix, the command lists them and stops instead of guessing.
+
 When both `--session-id` and `--pick` are supplied to `ocmonitor live`, `--session-id` takes precedence and `--pick` is ignored.
+
+#### Interactive keys (`--interactive-switch`)
+
+| Key | Action |
+|---|---|
+| `t` | Tool groups with call/success/failure counts |
+| `1..9` | Open the individual calls of that tool group (time, session, status, command/path/query) |
+| `m` | Chat transcript (user/assistant messages and tool summaries) |
+| `n` / `p` | Next / previous page inside a detail view, or next / previous workflow in the dashboard |
+| `l` | List **all sessions** in the history and switch to one |
+| `b` | Back (tool calls → tool groups → dashboard) |
+| `q` | Quit |
+
+The header always shows the session ID and the total number of iterations.
 
 **Features:**
 - 🔄 Auto-refreshing display with professional UI design
@@ -291,6 +342,9 @@ When both `--session-id` and `--pick` are supplied to `ocmonitor live`, `--sessi
 - 📝 Human-readable session titles instead of cryptic IDs
 - 🔗 **Workflow Tracking** - Automatically tracks entire workflow including sub-agents (explore, etc.)
 - 🔧 **Tool Usage Stats** - Shows success rates for tools (bash, read, edit, etc.) with color-coded progress bars
+- 🆔 **Session ID and iterations** in the header, including totals for multi-session workflows
+- 🕘 **Historical sessions** pinned by full ID or unique prefix, even after they are no longer active
+- 🔎 **Tool and chat drill-down** with `t` / `m` and simple keyboard paging
 
 [![Live Dashboard Screenshot](screenshots/live_dashboard.png)](screenshots/live_dashboard.png)
 
@@ -547,8 +601,8 @@ Currencies like JPY automatically use 0 decimal places unless explicitly configu
 The project uses `pyproject.toml` for modern Python packaging. You can install in development mode using either pip or pipx:
 
 ```bash
-git clone https://github.com/Shlomob/ocmonitor-share.git
-cd ocmonitor-share
+git clone https://github.com/jomarlla/ocmonitor.git
+cd ocmonitor
 
 # Using pip (editable install)
 python3 -m pip install -e ".[dev]"

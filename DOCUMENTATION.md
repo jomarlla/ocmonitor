@@ -6,6 +6,8 @@ Welcome to the complete documentation for OpenCode Monitor, a powerful CLI tool 
 
 **🆕 Recent Updates**: This documentation reflects the latest improvements including professional UI redesign, project analytics, session time tracking, and enhanced live dashboard features.
 
+> **🍴 Fork notice**: This documentation belongs to the [jomarlla/ocmonitor](https://github.com/jomarlla/ocmonitor) fork of [Shlomob/ocmonitor-share](https://github.com/Shlomob/ocmonitor-share). All original commands remain available. Fork additions include OpenCode 2.4+ `session_part` tool statistics, historical sessions and ID prefixes in `ocmonitor live`, the tool/chat drill-down views (`t` / `m`), the full-history session picker (`l`), and width-aware tables with a complete `Session ID` column.
+
 ## 📖 Table of Contents
 
 1. [Installation](#installation)
@@ -25,6 +27,8 @@ Welcome to the complete documentation for OpenCode Monitor, a powerful CLI tool 
 ---
 
 ## 🚀 Installation
+
+> **Fork install note:** this fork is not published on PyPI. Clone `https://github.com/jomarlla/ocmonitor.git` (methods below) or run `pipx install "git+https://github.com/jomarlla/ocmonitor.git"`.
 
 ### Prerequisites
 
@@ -46,8 +50,8 @@ Before installing OpenCode Monitor, ensure you have:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Shlomob/ocmonitor-share.git
-cd ocmonitor-share
+git clone https://github.com/jomarlla/ocmonitor.git
+cd ocmonitor
 
 # Install with pipx (recommended)
 pipx install .
@@ -70,8 +74,8 @@ For Linux and macOS users who prefer a traditional virtual environment setup:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Shlomob/ocmonitor-share.git
-cd ocmonitor-share
+git clone https://github.com/jomarlla/ocmonitor.git
+cd ocmonitor
 
 # Run the automated installer
 ./install.sh
@@ -90,8 +94,8 @@ For development or custom setups:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Shlomob/ocmonitor-share.git
-cd ocmonitor-share
+git clone https://github.com/jomarlla/ocmonitor.git
+cd ocmonitor
 
 # Install Python dependencies
 python3 -m pip install -r requirements.txt
@@ -296,7 +300,7 @@ ocmonitor sessions --format json
 
 *Click image to view full-size screenshot of sessions summary output*
 
-```
+**Session IDs and terminal width:** the table includes a full `Session ID` column for workflows, main sessions and sub-agents. On terminals narrower than 220 columns (245 with `--no-group`) it switches to a compact two-column layout that stacks the date, title, ID and metrics, folding long values instead of cropping them with `…`.
 
 ### 2. Time-Based Analysis Commands
 
@@ -491,11 +495,21 @@ ocmonitor projects ~/.local/share/opencode/storage/message --format csv
 Real-time monitoring dashboard that updates automatically.
 
 ```bash
-# Start live monitoring (updates every 5 seconds)
-ocmonitor live ~/.local/share/opencode/storage/message
+# Start live monitoring (SQLite is detected automatically)
+ocmonitor live
 
-# Custom refresh interval (in seconds)
-ocmonitor live ~/.local/share/opencode/storage/message --refresh 10
+# Custom refresh interval in seconds
+ocmonitor live --interval 10
+
+# Pick a workflow before launching (also enables interactive keys)
+ocmonitor live --pick
+
+# Pin an active, finished or historical session by full ID or unique prefix
+ocmonitor live --session-id ses_abc123
+ocmonitor live --session-id ses_abc
+
+# Enable interactive keys (see table below)
+ocmonitor live --interactive-switch
 ```
 
 **Features:**
@@ -505,9 +519,25 @@ ocmonitor live ~/.local/share/opencode/storage/message --refresh 10
 - 📈 Token usage updates and context window monitoring
 - 🚦 Color-coded status indicators (green/orange/yellow/red based on time elapsed)
 - 📂 Project name display for better context awareness
-- 📝 Human-readable session titles replacing cryptic session IDs
+- 🆔 Session ID and total iterations in the header
+- 🕘 Historical/finished sessions can be pinned; a unique ID prefix is accepted
 - 🎨 Clean, professional styling with optimal space utilization
 - 🔧 **Tool Usage Stats** - Real-time success rates for tools (bash, read, edit, etc.)
+- 🔎 **Tool drill-down** - `t` groups calls by tool, `1..9` shows each command/path/query with times and statuses
+- 💬 **Chat view** - `m` shows user/assistant messages and tool summaries for the workflow
+- 🗂️ **Full-history picker** - `l` lists every session, not only those active in the last 30 minutes
+
+**Interactive keys (`--interactive-switch`):**
+
+| Key | Action |
+|---|---|
+| `t` | Tool groups and counts |
+| `1..9` | Individual calls of the selected tool |
+| `m` | Chat transcript |
+| `n` / `p` | Next/previous page or workflow |
+| `l` | List all sessions and switch |
+| `b` | Back one level |
+| `q` | Quit |
 
 [![Live Dashboard Screenshot](screenshots/live_dashboard.png)](screenshots/live_dashboard.png)
 
